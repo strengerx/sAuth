@@ -101,3 +101,12 @@ export default async function connectMongoDB() {
         { cause: lastError }
     );
 }
+
+export const getMongoReadiness = () => {
+    return {
+        ready: mongoose.connection.readyState === 1,
+        state: mongoose.connection.readyState,
+        host: mongoose.connection.host || null,
+        name: mongoose.connection.name || null,
+    };
+};
