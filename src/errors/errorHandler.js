@@ -1,5 +1,6 @@
 import AppError from "./AppError.js";
 import { error as errorResponse } from "../responses/apiResponse.js";
+import { logError } from "../utils/logger.js";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -134,7 +135,14 @@ export const globalErrorHandler = (error, req, res, next) => {
     const exposeError = !isProduction || isOperationalError;
 
     if (!isOperationalError || !isProduction) {
-        console.error("Error handled by globalErrorHandler:", error.message);
+        logError("request_error", {
+            requestId: req.id || null,
+            method: req.method,
+            path: req.originalUrl,
+            statusCode: normalizedError.statusCode,
+            code: normalizedError.code,
+            message: error.message,
+        });
     }
 
     return errorResponse(
@@ -146,6 +154,7 @@ export const globalErrorHandler = (error, req, res, next) => {
         {
             method: req.method,
             path: req.originalUrl,
+            requestId: req.id || null,
             // ...(isProduction ? {} : { stack: normalizedError.stack })
         }
     );

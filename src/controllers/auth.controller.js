@@ -12,3 +12,13 @@ export const authenticate = catchAsync(async (req, res) => {
     const resource = await authService.authenticate(req.body);
     return response.success(res, resource, "authenticate successfully!");
 })
+
+export const refresh = catchAsync(async (req, res) => {
+    const resource = await authService.refresh(req.body);
+    return response.success(res, resource, "token refreshed successfully");
+});
+
+export const logout = catchAsync(async (req, res) => {
+    const resource = await authService.logout(req.body);
+    return response.success(res, resource, "logged out successfully");
+});

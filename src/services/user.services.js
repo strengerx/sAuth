@@ -12,7 +12,7 @@ const toUserResponse = (user) => {
 };
 
 export const getUserById = async (id) => {
-    const user = await userRepo.findUserById(id);
+    const user = await userRepo.findById(id);
     if (!user) {
         throw notFound("User not found");
     }
