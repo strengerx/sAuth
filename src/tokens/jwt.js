@@ -26,7 +26,11 @@ export const generateTokens = (user, refreshState) => {
 
     return {
         access: signToken({
-            payload: { id: user._id, email: user.email },
+            payload: {
+                id: user._id,
+                email: user.email,
+                sid: refreshState.sessionId,
+            },
         }),
         refresh: signToken({
             payload: {

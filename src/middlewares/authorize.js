@@ -1,5 +1,6 @@
 import { forbidden, unauthorized } from "../errors/httpErrors.js";
 import { verifyToken } from "../tokens/jwt.js";
+import { isSessionActive } from "../services/tokenSession.service.js";
 
 export const authorize = ({ type = "access" } = {}) => {
     return (req, res, next) => {
@@ -15,6 +16,10 @@ export const authorize = ({ type = "access" } = {}) => {
 
         try {
             const decoded = verifyToken({ token, type });
+
+            if (decoded?.sid && !isSessionActive(decoded.sid, decoded.id)) {
+                return next(unauthorized("Session has been revoked"));
+            }
 
             req.user = decoded;
             return next();
