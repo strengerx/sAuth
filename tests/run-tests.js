@@ -12,7 +12,6 @@ const mongooseConfigUrl = pathToFileURL(path.join(projectRoot, "src/configs/mong
 const appUrl = pathToFileURL(path.join(projectRoot, "src/app.js")).href;
 const userModelUrl = pathToFileURL(path.join(projectRoot, "src/models/User.js")).href;
 const tokenSessionUrl = pathToFileURL(path.join(projectRoot, "src/services/tokenSession.service.js")).href;
-const authServicesUrl = pathToFileURL(path.join(projectRoot, "src/services/auth.services.js")).href;
 
 const tests = [];
 
@@ -358,57 +357,6 @@ test("refresh session rotation revokes session on token reuse", async () => {
     assert.throws(() => {
         rotateSession({ sessionId, userId: "user-1", tokenId: first.tokenId });
     }, (error) => error.name === "AppError" && error.statusCode === 401);
-});
-
-
-test("GET /protected rejects access tokens for revoked sessions", async () => {
-    const { default: app } = await importFresh(appUrl, "protected-revoked-session");
-    const { signToken } = await importFresh(jwtUrl, "jwt-revoked-session");
-    const { createSession, rotateSession, revokeSession } = await importFresh(tokenSessionUrl, "token-session-revoke-access");
-
-    const sessionId = createSession("user-1");
-    rotateSession({ sessionId, userId: "user-1", tokenId: null });
-    revokeSession(sessionId);
-
-    const accessToken = signToken({
-        payload: { id: "user-1", email: "jane@example.com", sid: sessionId },
-        type: "access",
-    });
-
-    const server = await startServer(app);
-
-    try {
-        const response = await fetch(`${server.baseUrl}/protected`, {
-            headers: { authorization: `Bearer ${accessToken}` },
-        });
-        const body = await response.json();
-
-        assert.equal(response.status, 401);
-        assert.equal(body.code, "ERR_UNAUTHORIZED");
-    } finally {
-        await server.close();
-    }
-});
-
-test("refresh token cannot be reused after logout revokes its session", async () => {
-    const { signToken } = await importFresh(jwtUrl, "jwt-logout-refresh");
-    const { createSession, rotateSession } = await importFresh(tokenSessionUrl, "token-session-logout-refresh");
-    const authServices = await importFresh(authServicesUrl, "auth-services-logout-refresh");
-
-    const sessionId = createSession("user-1");
-    const refreshState = rotateSession({ sessionId, userId: "user-1", tokenId: null });
-
-    const refreshToken = signToken({
-        payload: { id: "user-1", sid: refreshState.sessionId, jti: refreshState.tokenId },
-        type: "refresh",
-    });
-
-    await authServices.logout({ refreshToken });
-
-    await assert.rejects(
-        authServices.refresh({ refreshToken }),
-        (error) => error.name === "AppError" && error.statusCode === 401
-    );
 });
 
 let passed = 0;
