@@ -33,3 +33,8 @@ export const authenticateSchema = z
     })
     .strict("Unexpected field(s) in request body");
 
+export const refreshSchema = z
+    .object({
+        refreshToken: requiredString("Refresh token")
+    })
+    .strict("Unexpected field(s) in request body");

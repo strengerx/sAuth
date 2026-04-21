@@ -19,13 +19,21 @@ export const signToken = ({ payload, type = "access" }) => {
     });
 };
 
-export const generateTokens = (user) => {
+export const generateTokens = (user, refreshState) => {
+    if (!refreshState?.sessionId || !refreshState?.tokenId) {
+        throw unauthorized("Refresh token state is required");
+    }
+
     return {
         access: signToken({
             payload: { id: user._id, email: user.email },
         }),
         refresh: signToken({
-            payload: { id: user._id },
+            payload: {
+                id: user._id,
+                sid: refreshState.sessionId,
+                jti: refreshState.tokenId,
+            },
             type: "refresh",
         }),
     };

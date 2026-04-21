@@ -11,6 +11,7 @@ const jwtUrl = pathToFileURL(path.join(projectRoot, "src/tokens/jwt.js")).href;
 const mongooseConfigUrl = pathToFileURL(path.join(projectRoot, "src/configs/mongoose.config.js")).href;
 const appUrl = pathToFileURL(path.join(projectRoot, "src/app.js")).href;
 const userModelUrl = pathToFileURL(path.join(projectRoot, "src/models/User.js")).href;
+const tokenSessionUrl = pathToFileURL(path.join(projectRoot, "src/services/tokenSession.service.js")).href;
 
 const tests = [];
 
@@ -306,6 +307,56 @@ test("buildMongoConnectionString preserves URIs that already include a database 
     );
 
     assert.equal(connectionString, "mongodb://localhost:27017/existing-db?retryWrites=true");
+});
+
+
+test("GET /health/live returns liveness data and request id header", async () => {
+    const { default: app } = await importFresh(appUrl, "health-live");
+    const server = await startServer(app);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/health/live`);
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(body.data.live, true);
+        assert.ok(response.headers.get("x-request-id"));
+    } finally {
+        await server.close();
+    }
+});
+
+test("GET /health/ready reflects dependency readiness", async () => {
+    const { default: app } = await importFresh(appUrl, "health-ready");
+    const server = await startServer(app);
+
+    try {
+        const response = await fetch(`${server.baseUrl}/health/ready`);
+        const body = await response.json();
+
+        assert.equal(response.status, 503);
+        assert.equal(body.data.ready, false);
+        assert.equal(body.data.dependencies.mongo.ready, false);
+        assert.equal(body.data.dependencies.sessionStore.ready, true);
+    } finally {
+        await server.close();
+    }
+});
+
+test("refresh session rotation revokes session on token reuse", async () => {
+    const { createSession, rotateSession } = await importFresh(tokenSessionUrl, "token-session-rotation");
+
+    const sessionId = createSession("user-1");
+    const first = rotateSession({ sessionId, userId: "user-1", tokenId: null });
+    const second = rotateSession({ sessionId, userId: "user-1", tokenId: first.tokenId });
+
+    assert.ok(first.tokenId);
+    assert.ok(second.tokenId);
+    assert.notEqual(first.tokenId, second.tokenId);
+
+    assert.throws(() => {
+        rotateSession({ sessionId, userId: "user-1", tokenId: first.tokenId });
+    }, (error) => error.name === "AppError" && error.statusCode === 401);
 });
 
 let passed = 0;
