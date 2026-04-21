@@ -9,6 +9,8 @@ const projectRoot = process.cwd();
 const envConfigUrl = pathToFileURL(path.join(projectRoot, "src/configs/env.config.js")).href;
 const jwtUrl = pathToFileURL(path.join(projectRoot, "src/tokens/jwt.js")).href;
 const mongooseConfigUrl = pathToFileURL(path.join(projectRoot, "src/configs/mongoose.config.js")).href;
+const appUrl = pathToFileURL(path.join(projectRoot, "src/app.js")).href;
+const userModelUrl = pathToFileURL(path.join(projectRoot, "src/models/User.js")).href;
 
 const tests = [];
 
@@ -44,6 +46,49 @@ const withEnv = async (overrides, run) => {
             }
         }
     }
+};
+
+const withPatchedMethods = async (target, patches, run) => {
+    const originals = new Map();
+
+    for (const [key, value] of Object.entries(patches)) {
+        originals.set(key, target[key]);
+        target[key] = value;
+    }
+
+    try {
+        return await run();
+    } finally {
+        for (const [key, value] of originals.entries()) {
+            target[key] = value;
+        }
+    }
+};
+
+const startServer = async (app) => {
+    return await new Promise((resolve, reject) => {
+        const server = app.listen(0, () => {
+            const address = server.address();
+
+            resolve({
+                baseUrl: `http://127.0.0.1:${address.port}`,
+                close: () => {
+                    return new Promise((closeResolve, closeReject) => {
+                        server.close((error) => {
+                            if (error) {
+                                closeReject(error);
+                                return;
+                            }
+
+                            closeResolve();
+                        });
+                    });
+                }
+            });
+        });
+
+        server.on("error", reject);
+    });
 };
 
 test("env config fails fast when required secrets are missing", async () => {
@@ -101,6 +146,143 @@ test("verifyToken leaves JWT library errors intact for centralized handling", as
     assert.throws(
         () => verifyToken({ token: "not-a-jwt" }),
         (error) => error.name === "JsonWebTokenError"
+    );
+});
+
+test("GET /users/me returns the authenticated user's profile", async () => {
+    const { default: app } = await importFresh(appUrl, "user-route-me");
+    const { default: User } = await import(userModelUrl);
+    const { signToken } = await importFresh(jwtUrl, "jwt-user-route-me");
+
+    const userRecord = {
+        _id: "user-1",
+        name: "Jane Doe",
+        email: "jane@example.com",
+        createdAt: "2026-04-09T00:00:00.000Z",
+        updatedAt: "2026-04-09T01:00:00.000Z",
+    };
+
+    let requestedId = null;
+
+    await withPatchedMethods(
+        User,
+        {
+            findById: (id) => ({
+                select: () => ({
+                    lean: async () => {
+                        requestedId = id;
+                        return id === userRecord._id ? userRecord : null;
+                    }
+                })
+            })
+        },
+        async () => {
+            const server = await startServer(app);
+            const token = signToken({
+                payload: { id: userRecord._id, email: userRecord.email }
+            });
+
+            try {
+                const response = await fetch(`${server.baseUrl}/users/me`, {
+                    headers: {
+                        authorization: `Bearer ${token}`
+                    }
+                });
+                const body = await response.json();
+
+                assert.equal(response.status, 200);
+                assert.equal(requestedId, userRecord._id);
+                assert.deepEqual(body.data, {
+                    id: userRecord._id,
+                    name: userRecord.name,
+                    email: userRecord.email,
+                    createdAt: userRecord.createdAt,
+                    updatedAt: userRecord.updatedAt,
+                });
+            } finally {
+                await server.close();
+            }
+        }
+    );
+});
+
+test("GET /users/:id blocks access to another user's profile", async () => {
+    const { default: app } = await importFresh(appUrl, "user-route-forbidden");
+    const { default: User } = await import(userModelUrl);
+    const { signToken } = await importFresh(jwtUrl, "jwt-user-route-forbidden");
+
+    let findByIdCalls = 0;
+
+    await withPatchedMethods(
+        User,
+        {
+            findById: () => {
+                findByIdCalls += 1;
+                return {
+                    select: () => ({
+                        lean: async () => null
+                    })
+                };
+            }
+        },
+        async () => {
+            const server = await startServer(app);
+            const token = signToken({
+                payload: { id: "user-1", email: "jane@example.com" }
+            });
+
+            try {
+                const response = await fetch(`${server.baseUrl}/users/user-2`, {
+                    headers: {
+                        authorization: `Bearer ${token}`
+                    }
+                });
+                const body = await response.json();
+
+                assert.equal(response.status, 403);
+                assert.equal(body.code, "ERR_FORBIDDEN");
+                assert.equal(findByIdCalls, 0);
+            } finally {
+                await server.close();
+            }
+        }
+    );
+});
+
+test("GET /users/:id returns 404 when the authenticated user does not exist", async () => {
+    const { default: app } = await importFresh(appUrl, "user-route-not-found");
+    const { default: User } = await import(userModelUrl);
+    const { signToken } = await importFresh(jwtUrl, "jwt-user-route-not-found");
+
+    await withPatchedMethods(
+        User,
+        {
+            findById: () => ({
+                select: () => ({
+                    lean: async () => null
+                })
+            })
+        },
+        async () => {
+            const server = await startServer(app);
+            const token = signToken({
+                payload: { id: "user-1", email: "jane@example.com" }
+            });
+
+            try {
+                const response = await fetch(`${server.baseUrl}/users/user-1`, {
+                    headers: {
+                        authorization: `Bearer ${token}`
+                    }
+                });
+                const body = await response.json();
+
+                assert.equal(response.status, 404);
+                assert.equal(body.code, "ERR_NOT_FOUND");
+            } finally {
+                await server.close();
+            }
+        }
     );
 });
 

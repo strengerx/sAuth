@@ -9,11 +9,11 @@ export const register = async (resource) => {
         throw conflict("Email already exists");
     }
     const hashPassword = await hash.hashPassword(resource.password);
-    return userRepo.create({ ...resource, password: hashPassword });
+    return userRepo.createUser({ ...resource, password: hashPassword });
 }
 
 export const authenticate = async ({ email, password }) => {
-    const user = await userRepo.getByEmailWithPassword(email);
+    const user = await userRepo.findUserByEmailWithPassword(email);
     if (!user) {
         throw unauthorized("invalid credentials!")
     }

@@ -1,26 +1,35 @@
-import { unauthorized } from "../errors/httpErrors.js"
+import { forbidden, unauthorized } from "../errors/httpErrors.js";
 import { verifyToken } from "../tokens/jwt.js";
 
-export const authorize = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    const bearerTokenMatch = typeof authHeader === "string"
-        ? authHeader.match(/^Bearer\s+(.+)$/i)
-        : null;
+export const authorize = ({ type = "access" } = {}) => {
+    return (req, res, next) => {
+        const authHeader = req.headers.authorization
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            return next(unauthorized("Authorization token missing or malformed"));
+        }
 
-    if (!bearerTokenMatch) {
-        return next(unauthorized("No token provided"));
-    }
+        const token = authHeader.split(" ")[1];
+        if (!token) {
+            return next(unauthorized("Authorization token missing or malformed"));
+        }
 
-    const token = bearerTokenMatch[1].trim();
+        try {
+            const decoded = verifyToken({ token, type });
 
-    if (token.length === 0) {
-        return next(unauthorized("No token provided"));
-    }
+            req.user = decoded;
+            return next();
+        } catch (error) {
+            return next(unauthorized("Invalid or expired token"));
+        }
+    };
+};
 
-    try {
-        req.user = verifyToken({ token });
+export const requireSameUser = (paramKey = "id") => {
+    return (req, res, next) => {
+        if (String(req.user?.id) !== String(req.params[paramKey])) {
+            return next(forbidden("You can only access your own user resource"));
+        }
+
         return next();
-    } catch (error) {
-        return next(error);
-    }
-}
+    };
+};
