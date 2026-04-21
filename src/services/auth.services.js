@@ -4,16 +4,16 @@ import { generateTokens } from "../tokens/jwt.js";
 import * as hash from "../utils/hash.js";
 
 export const register = async (resource) => {
-    const existingUser = await userRepo.getByEmail(resource.email);
+    const existingUser = await userRepo.findByEmail(resource.email);
     if (existingUser) {
         throw conflict("Email already exists");
     }
     const hashPassword = await hash.hashPassword(resource.password);
-    return userRepo.createUser({ ...resource, password: hashPassword });
+    return userRepo.create({ ...resource, password: hashPassword });
 }
 
 export const authenticate = async ({ email, password }) => {
-    const user = await userRepo.findUserByEmailWithPassword(email);
+    const user = await userRepo.findByEmailWithPassword(email);
     if (!user) {
         throw unauthorized("invalid credentials!")
     }
