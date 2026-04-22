@@ -14,9 +14,7 @@ const getTokenConfig = (type) => {
 
 export const signToken = ({ payload, type = "access" }) => {
     const config = getTokenConfig(type);
-    return jwt.sign(payload, config.secret, {
-        expiresIn: config.expiresIn,
-    });
+    return jwt.sign(payload, config.secret, { expiresIn: config.expiresIn, });
 };
 
 export const generateTokens = (user, refreshState) => {

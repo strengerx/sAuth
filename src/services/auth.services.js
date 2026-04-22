@@ -1,8 +1,12 @@
 import { conflict, unauthorized } from "../errors/httpErrors.js";
-import * as userRepo from "../repo/user.repo.js"
+import * as userRepo from "../repo/user.repo.js";
 import { generateTokens, verifyToken } from "../tokens/jwt.js";
 import * as hash from "../utils/hash.js";
-import { createSession, revokeSession, rotateSession } from "./tokenSession.service.js";
+import {
+    createSession,
+    revokeSession,
+    rotateSession,
+} from "./tokenSession.service.js";
 
 export const register = async (resource) => {
     const existingUser = await userRepo.findByEmail(resource.email);
@@ -11,24 +15,28 @@ export const register = async (resource) => {
     }
     const hashPassword = await hash.hashPassword(resource.password);
     return userRepo.create({ ...resource, password: hashPassword });
-}
+};
 
 export const authenticate = async ({ email, password }) => {
     const user = await userRepo.findByEmailWithPassword(email);
     if (!user) {
-        throw unauthorized("invalid credentials!")
+        throw unauthorized("Invalid credentials!");
     }
     const isMatch = await hash.comparePassword(password, user.password);
     if (!isMatch) {
-        throw unauthorized("invalid credentials!")
+        throw unauthorized("Invalid credentials!");
     }
 
     const sessionId = createSession(user._id);
-    const refreshState = rotateSession({ sessionId, userId: user._id, tokenId: null });
+    const refreshState = rotateSession({
+        sessionId,
+        userId: user._id,
+        tokenId: null,
+    });
     const tokens = generateTokens(user, refreshState);
 
-    return { user: { id: user._id, name: user.name, email: user.email }, tokens }
-}
+    return { user: { id: user._id, name: user.name, email: user.email }, tokens };
+};
 
 export const refresh = async ({ refreshToken }) => {
     const decoded = verifyToken({ token: refreshToken, type: "refresh" });
@@ -48,7 +56,10 @@ export const refresh = async ({ refreshToken }) => {
         throw unauthorized("Invalid refresh token");
     }
 
-    const tokens = generateTokens({ _id: user._id, email: user.email }, refreshState);
+    const tokens = generateTokens(
+        { _id: user._id, email: user.email },
+        refreshState,
+    );
 
     return {
         user: { id: user._id, name: user.name, email: user.email },

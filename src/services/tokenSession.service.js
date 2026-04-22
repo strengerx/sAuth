@@ -43,6 +43,20 @@ export const rotateSession = ({ sessionId, userId, tokenId }) => {
     return { sessionId: String(sessionId), tokenId: nextTokenId };
 };
 
+export const isSessionActive = (sessionId, userId = null) => {
+    const session = sessions.get(String(sessionId));
+
+    if (!session || session.revoked) {
+        return false;
+    }
+
+    if (userId != null && session.userId !== String(userId)) {
+        return false;
+    }
+
+    return true;
+};
+
 export const revokeSession = (sessionId) => {
     const session = sessions.get(String(sessionId));
 
