@@ -1,36 +1,39 @@
 # sAuth
 
-A reusable Node.js authentication backend focused on secure session-based JWT authentication. It implements registration, credential authentication, access/refresh token generation, refresh-token rotation, logout/revocation, request validation, and authentication rate limiting.
+> A reusable, security-focused Node.js authentication backend built around JWT access tokens and stateful refresh sessions.
 
-## Highlights
+sAuth is an authentication service designed to make the **hard parts of JWT authentication explicit**: refresh-token rotation, session state, reuse detection, revocation, validation, and abuse protection.
+
+## Features
 
 - JWT access and refresh tokens
-- Stateful refresh sessions with rotation
+- Stateful refresh-token sessions
+- Refresh-token rotation
 - Refresh-token reuse detection
-- Explicit session revocation on logout
-- Password hashing with bcrypt
-- Request validation with Zod
+- Session revocation on logout
+- bcrypt password hashing
+- Zod request validation
 - Authentication and brute-force rate limiting
 - Centralized HTTP error handling
 - Consistent JSON API responses
 - MongoDB persistence with Mongoose
 - Automated test entry point
 
-## Authentication Flow
+## Authentication lifecycle
 
 ```text
 Register
    │
    ▼
-Hash password ──► Store user
+Validate input ──► Hash password ──► Store user
 
 Login
    │
    ▼
-Verify credentials
+Validate credentials
    │
    ▼
-Create session
+Create refresh session
    │
    ▼
 Issue access + refresh tokens
@@ -41,10 +44,12 @@ Refresh
 Verify refresh JWT
    │
    ▼
-Validate session + current token ID
+Validate session + token ID
+   │
+   ├── mismatch ──► Revoke session
    │
    ▼
-Rotate refresh token state
+Rotate refresh-token state
    │
    ▼
 Issue new token pair
@@ -52,16 +57,16 @@ Issue new token pair
 Logout
    │
    ▼
-Revoke session
+Revoke refresh session
 ```
 
-A refresh token carries a session identifier and token identifier. The server compares the presented token identifier with the active session state; unexpected reuse revokes the session.
+A refresh token carries a session identifier and token identifier. The server compares the presented token against the active session state. An unexpected token identifier indicates possible reuse and causes the session to be revoked.
 
-## Security Model
+## Security model
 
-The project separates token signing/verification from authentication business logic. Passwords are hashed before persistence, authentication inputs are validated, login attempts are rate-limited, and refresh sessions can be revoked.
+sAuth separates token cryptography from authentication business logic. Credentials are validated before use, passwords are hashed before persistence, authentication attempts are rate-limited, and refresh sessions can be explicitly revoked.
 
-The in-memory session store is intentionally simple for this project. A horizontally scaled production deployment should replace it with shared persistent storage such as Redis or a database-backed session store.
+The current refresh-session storage is intentionally simple and in-memory. **Do not use it as-is for a horizontally scaled production deployment.** Replace it with shared persistent storage such as Redis or a database-backed session store so all application instances observe the same session state.
 
 ## API
 
@@ -71,21 +76,21 @@ The authentication router exposes:
 |---|---|---|
 | POST | `/authenticate` | Authenticate credentials and issue tokens |
 | POST | `/register` | Create a user account |
-| POST | `/refresh` | Rotate a refresh token and issue new tokens |
+| POST | `/refresh` | Rotate a refresh token and issue a new token pair |
 | POST | `/logout` | Revoke the refresh session |
 
 The exact route prefix depends on the server configuration.
 
-## Tech Stack
+## Tech stack
 
-- Node.js / ES Modules
-- Express 5
-- MongoDB / Mongoose
-- JSON Web Tokens
-- bcrypt
-- Zod
+- **Node.js** — ES Modules
+- **Express 5** — HTTP API
+- **MongoDB / Mongoose** — persistence
+- **jsonwebtoken** — JWT creation and verification
+- **bcrypt** — password hashing
+- **Zod** — input validation
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
@@ -98,7 +103,7 @@ The exact route prefix depends on the server configuration.
 npm install
 ```
 
-Create the required environment configuration for the JWT and database settings used by the project. Keep secrets out of source control.
+Create the environment configuration required by the application for database and JWT settings. **Never commit real secrets.**
 
 ### Development
 
@@ -125,7 +130,7 @@ src/
 ├── configs/       # Application and JWT configuration
 ├── controllers/  # HTTP request handlers
 ├── errors/       # HTTP error helpers
-├── middlewares/   # Validation and rate limiting
+├── middlewares/  # Validation and rate limiting
 ├── repo/         # Database access
 ├── routes/       # Express routes
 ├── services/     # Authentication/session business logic
@@ -133,13 +138,29 @@ src/
 └── utils/        # Hashing, responses, logging, async helpers
 ```
 
+## Production hardening roadmap
+
+For a production deployment, consider adding:
+
+- Redis-backed refresh-session storage
+- Key rotation and asymmetric JWT signing where appropriate
+- Secure, HTTP-only, SameSite cookie strategy for browser clients
+- Refresh-token family tracking and stronger replay detection
+- Token/session expiration and cleanup jobs
+- Audit/security event logging
+- Account lockout or progressive throttling policies
+- Password reset and email-verification flows
+- Automated security and dependency scanning
+- Integration tests covering authentication abuse cases
+- CI checks for tests, linting, and security regressions
+
 ## Why this project
 
-sAuth is intentionally narrower than a full application: it isolates authentication concerns so the security model is easy to study and reuse. The interesting part is not simply issuing a JWT; it is managing refresh sessions, rotation, revocation, reuse detection, validation, and abuse protection together.
+The goal of sAuth is not merely to demonstrate how to sign a JWT. It focuses on the surrounding security model required to make authentication manageable: session lifecycle, rotation, revocation, reuse detection, validation, and abuse protection.
 
 ## Status
 
-Active development. Interfaces and implementation details may evolve.
+**Active development.** Interfaces and implementation details may evolve.
 
 ## License
 
