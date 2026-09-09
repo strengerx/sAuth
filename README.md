@@ -1,109 +1,192 @@
 # sAuth
 
-> A reusable, security-focused Node.js authentication backend built around JWT access tokens and stateful refresh sessions.
+sAuth is a production-style Node.js authentication API built around **Express, MongoDB/Mongoose, Redis, bcrypt, JWT, and Zod**. The project focuses on practical authentication engineering: short-lived access tokens, Redis-backed refresh sessions, atomic refresh-token rotation, session revocation, abuse protection, request tracing, health checks, and a documented API contract.
 
-sAuth is an authentication service designed to make the **hard parts of JWT authentication explicit**: refresh-token rotation, session state, reuse detection, revocation, validation, and abuse protection.
+> **Goal:** build authentication as a system, not just a `jwt.sign()` helper.
 
-## Features
+## Highlights
 
-- JWT access and refresh tokens
-- Stateful refresh-token sessions
-- Refresh-token rotation
-- Refresh-token reuse detection
-- Session revocation on logout
-- bcrypt password hashing
+- JWT access tokens with a separate refresh-token flow
+- Redis-backed server-side refresh sessions
+- Atomic refresh-token rotation with Redis Lua scripts
+- Refresh-token reuse detection and session revocation
+- Redis-backed distributed rate limiting
+- Account-aware brute-force protection
 - Zod request validation
-- Authentication and brute-force rate limiting
+- Password hashing with bcrypt
+- Configurable trusted-proxy handling
+- Structured JSON logging and request IDs
+- Liveness and dependency-readiness endpoints
 - Centralized HTTP error handling
-- Consistent JSON API responses
-- MongoDB persistence with Mongoose
-- Automated test entry point
+- OpenAPI 3 documentation
+- ESLint, Prettier, and executable regression tests
 
-## Authentication lifecycle
+## Authentication Flow
 
 ```text
-Register
-   │
-   ▼
-Validate input ──► Hash password ──► Store user
-
-Login
-   │
-   ▼
-Validate credentials
-   │
-   ▼
-Create refresh session
-   │
-   ▼
-Issue access + refresh tokens
-
-Refresh
-   │
-   ▼
-Verify refresh JWT
-   │
-   ▼
-Validate session + token ID
-   │
-   ├── mismatch ──► Revoke session
-   │
-   ▼
-Rotate refresh-token state
-   │
-   ▼
-Issue new token pair
-
-Logout
-   │
-   ▼
-Revoke refresh session
+                         ┌──────────────────┐
+                         │      Client      │
+                         └────────┬─────────┘
+                                  │
+                                  ▼
+                         ┌──────────────────┐
+                         │   Express API    │
+                         └────────┬─────────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    ▼                           ▼
+              ┌───────────┐               ┌───────────┐
+              │ MongoDB   │               │   Redis   │
+              │   Users   │               │ Sessions  │
+              └───────────┘               │ Rate limit│
+                                          └───────────┘
 ```
 
-A refresh token carries a session identifier and token identifier. The server compares the presented token against the active session state. An unexpected token identifier indicates possible reuse and causes the session to be revoked.
+### Login
 
-## Security model
+```text
+Credentials
+    │
+    ▼
+Validate request
+    │
+    ▼
+Check rate limits
+    │
+    ▼
+Verify password
+    │
+    ▼
+Create Redis refresh session
+    │
+    ▼
+Issue access + refresh tokens
+```
 
-sAuth separates token cryptography from authentication business logic. Credentials are validated before use, passwords are hashed before persistence, authentication attempts are rate-limited, and refresh sessions can be explicitly revoked.
+### Refresh
 
-The current refresh-session storage is intentionally simple and in-memory. **Do not use it as-is for a horizontally scaled production deployment.** Replace it with shared persistent storage such as Redis or a database-backed session store so all application instances observe the same session state.
+```text
+Refresh token
+    │
+    ▼
+Verify JWT policy
+    │
+    ▼
+Atomically compare current token ID
+    │
+    ├── mismatch ──► Revoke session / reject reuse
+    │
+    └── match ─────► Generate new token ID
+                           │
+                           ▼
+                    Issue new token pair
+```
+
+The refresh session is the server-side source of truth for refresh-token validity. Redis Lua scripts make rotation and revocation atomic, preventing concurrent refresh requests from both successfully advancing the same session.
+
+## Security Model
+
+### Token security
+
+- Access and refresh tokens use separate secrets.
+- JWT verification pins the expected algorithm (`HS256`), issuer (`sauth`), and audience (`sauth-client`).
+- Refresh tokens contain session/token identifiers that are checked against Redis state.
+- Refresh sessions have a server-side TTL aligned with refresh-token expiration.
+- Logout revokes the associated refresh session.
+
+### Refresh-token reuse protection
+
+Each refresh session tracks its current token identifier. During rotation, Redis atomically verifies the presented identifier before replacing it. A stale identifier is treated as reuse and the session is revoked.
+
+### Rate limiting
+
+Authentication rate limiting is Redis-backed and therefore shared across application instances. The implementation uses an atomic Redis `INCR` + `PEXPIRE` Lua script and exposes standard rate-limit response headers.
+
+Separate limits can be applied to authentication routes and account/IP combinations to reduce brute-force attempts.
+
+### Failure behavior
+
+Redis is a required dependency for protected authentication flows and rate limiting. If the session/rate-limit store is unavailable, the application fails closed with a generic `503` instead of bypassing security checks or exposing infrastructure details.
+
+### Request tracing and proxy handling
+
+Requests can carry a bounded, sanitized request ID for correlation. Structured logs record useful request metadata without credentials or tokens. Client IP information is only trusted through explicitly configured proxy hops.
 
 ## API
 
-The authentication router exposes:
+The API is mounted under `/api/v1`.
 
-| Method | Endpoint | Purpose |
-|---|---|---|
-| POST | `/authenticate` | Authenticate credentials and issue tokens |
-| POST | `/register` | Create a user account |
-| POST | `/refresh` | Rotate a refresh token and issue a new token pair |
-| POST | `/logout` | Revoke the refresh session |
+| Method | Path | Authentication | Purpose |
+|---|---|---|---|
+| `GET` | `/health/live` | None | Process liveness |
+| `GET` | `/health/ready` | None | MongoDB and Redis readiness |
+| `GET` | `/openapi.json` | None | OpenAPI contract |
+| `POST` | `/auth/register` | None | Create a user |
+| `POST` | `/auth/authenticate` | None | Authenticate and issue tokens |
+| `POST` | `/auth/refresh` | Refresh token | Rotate refresh token and issue a new pair |
+| `POST` | `/auth/logout` | Refresh token | Revoke the refresh session |
+| `GET` | `/users/me` | Access token | Read the current user |
+| `GET` | `/users/:id` | Access token | Read the current user's requested profile |
 
-The exact route prefix depends on the server configuration.
+`/users/:id` is protected by same-user authorization rather than being a general user lookup endpoint.
 
-## Tech stack
+Successful responses use a consistent `status`, `message`, `data`, and `meta` shape. Errors expose an HTTP status, stable error code, request ID, and safe validation details.
 
-- **Node.js** — ES Modules
-- **Express 5** — HTTP API
-- **MongoDB / Mongoose** — persistence
-- **jsonwebtoken** — JWT creation and verification
-- **bcrypt** — password hashing
-- **Zod** — input validation
+## OpenAPI
 
-## Getting started
+The API contract is defined in `src/docs/openapi.js` and exposed through `/openapi.json`.
 
-### Prerequisites
+The current contract covers the primary authentication endpoints. A useful next step is expanding it to fully describe request/response schemas, authentication requirements, cookies/headers, error payloads, and reusable security components.
 
-- Node.js 18+
+## Project Structure
+
+```text
+server.js
+src/
+├── configs/       # Environment, MongoDB, Redis, and JWT configuration
+├── controllers/   # HTTP request handlers
+├── docs/          # OpenAPI API contract
+├── errors/        # Application errors and normalization
+├── middlewares/   # Validation, authentication, authorization, tracing, rate limits
+├── models/        # Mongoose models
+├── repo/          # Database access layer
+├── responses/     # Standard API response helpers
+├── routes/        # HTTP route definitions
+├── services/      # Authentication, user, and session business logic
+├── tokens/        # JWT creation and verification
+├── utils/         # Logging and shared utilities
+└── validations/   # Zod request schemas
+
+tests/             # Executable regression suite
+```
+
+The repository deliberately separates controllers, services, persistence, token handling, and infrastructure configuration so authentication behavior can evolve without turning route handlers into a monolith.
+
+## Setup
+
+### Requirements
+
+- Node.js 20+
 - MongoDB
+- Redis
 
 ### Install
 
 ```bash
-npm install
+npm ci
 ```
 
-Create the environment configuration required by the application for database and JWT settings. **Never commit real secrets.**
+### Configure
+
+```bash
+cp .env.example .env
+```
+
+On Windows, copy `.env.example` to `.env` using your editor or PowerShell.
+
+Configure MongoDB, Redis, JWT secrets, token/session TTLs, rate limits, and proxy settings according to the environment. Production deployments reject JWT secrets shorter than 32 characters.
+
+**Never commit real secrets.**
 
 ### Development
 
@@ -117,51 +200,73 @@ npm run dev
 npm start
 ```
 
-### Tests
+## Development Commands
 
 ```bash
 npm test
+npm run lint
+npm run format
+npm run format:check
+npm run check
 ```
 
-## Architecture
+`npm run check` runs linting, formatting validation, and the test suite.
 
-```text
-src/
-├── configs/       # Application and JWT configuration
-├── controllers/  # HTTP request handlers
-├── errors/       # HTTP error helpers
-├── middlewares/  # Validation and rate limiting
-├── repo/         # Database access
-├── routes/       # Express routes
-├── services/     # Authentication/session business logic
-├── tokens/       # JWT creation and verification
-└── utils/        # Hashing, responses, logging, async helpers
-```
+## Testing
 
-## Production hardening roadmap
+The regression suite covers configuration validation, JWT policy, protected user routes, health behavior, Redis-backed rate limiting, and refresh-session rotation/reuse protection.
 
-For a production deployment, consider adding:
+Redis and MongoDB integration behavior should also be exercised in CI using disposable service containers or equivalent test infrastructure.
 
-- Redis-backed refresh-session storage
-- Key rotation and asymmetric JWT signing where appropriate
-- Secure, HTTP-only, SameSite cookie strategy for browser clients
-- Refresh-token family tracking and stronger replay detection
-- Token/session expiration and cleanup jobs
-- Audit/security event logging
-- Account lockout or progressive throttling policies
-- Password reset and email-verification flows
-- Automated security and dependency scanning
-- Integration tests covering authentication abuse cases
-- CI checks for tests, linting, and security regressions
+## Deployment Considerations
 
-## Why this project
+sAuth is designed with production-style failure behavior, but it is still a learning/reference project rather than a turnkey identity provider.
 
-The goal of sAuth is not merely to demonstrate how to sign a JWT. It focuses on the surrounding security model required to make authentication manageable: session lifecycle, rotation, revocation, reuse detection, validation, and abuse protection.
+Before production adoption, consider:
+
+- TLS termination and secure cookie configuration
+- Refresh-token storage strategy and CSRF model for browser clients
+- Secret management through a dedicated secrets manager
+- Redis high availability and persistence requirements
+- MongoDB indexes, backups, and connection-pool tuning
+- Centralized log collection and metrics
+- Distributed tracing
+- CI security/dependency scanning
+- Automated integration and load testing
+- Account recovery and password-reset flows
+- Email verification and MFA/WebAuthn where required
+- User/admin session management APIs
+
+## Engineering Trade-offs
+
+### Why Redis?
+
+Redis provides shared, low-latency state for refresh sessions and rate limiting. This avoids process-local authentication state and allows multiple application instances to coordinate session rotation and abuse protection.
+
+### Why server-side refresh sessions?
+
+A purely stateless refresh JWT is difficult to revoke immediately. Keeping refresh-session state server-side makes logout, reuse detection, and future session-management features possible.
+
+### Why Lua scripts?
+
+Refresh rotation is a read-modify-write operation. A Lua script keeps the validation and mutation inside Redis as one atomic operation, reducing race conditions between concurrent refresh requests.
+
+## Roadmap
+
+- [ ] Complete OpenAPI request/response schemas
+- [ ] Add browser-oriented secure cookie/CSRF documentation and tests
+- [ ] Add password reset and email verification
+- [ ] Add session listing and per-session revocation
+- [ ] Add MFA/WebAuthn support
+- [ ] Add integration-test services to CI
+- [ ] Add metrics and distributed tracing
+- [ ] Add dependency and container security scanning
+- [ ] Add load/concurrency tests for refresh rotation
 
 ## Status
 
-**Active development.** Interfaces and implementation details may evolve.
+**Active development.** The project is primarily intended as a serious authentication-engineering learning project and reusable backend foundation. APIs and internal interfaces may evolve.
 
 ## License
 
-ISC
+The package metadata currently declares **ISC**. Confirm the intended public licensing terms before treating this as a distributable authentication package.
